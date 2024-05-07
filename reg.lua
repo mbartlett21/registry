@@ -1,30 +1,6 @@
-local string_find = string.find
 local string_lower = string.lower
 local string_match = string.match
 local string_sub = string.sub
-
-local function run_command(...) --> io.file
-    local tbl
-    if type((...)) == 'table' then
-        tbl = ...
-    else
-        tbl = {...}
-    end
-    local s = ''
-    for i, v in ipairs(tbl) do
-        if i ~= 1 then
-            s = s .. ' '
-        end
-        if string_find(v, ' ') then
-            s = s .. '"' .. v .. '"'
-        else
-            s = s .. v
-        end
-    end
-    -- print()
-    -- print('> ' .. s)
-    return io.popen('"' .. s .. '"'), s
-end
 
 local path_key <const> = {}
 
@@ -87,14 +63,14 @@ local function parse_reg_command_output(result, path, includes_all_under)
 end
 
 local function fill_dat_entries(path)
-    local result = run_command { 'reg', 'query', path }
+    local result = io.popen('"reg query "' .. path .. '""')
     if not result then error 'reg command did not work' end
 
     return parse_reg_command_output(result, path, false)
 end
 
 local function fill_dat_entries_full(path)
-    local result = run_command { 'reg', 'query', path, '/s' }
+    local result = io.popen('"reg query "' .. path .. '" /s"')
     if not result then error 'reg command did not work' end
 
     return parse_reg_command_output(result, path, true)
