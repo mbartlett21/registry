@@ -1,3 +1,8 @@
+local string_find = string.find
+local string_lower = string.lower
+local string_match = string.match
+local string_sub = string.sub
+
 local function run_command(...) --> io.file
     local tbl
     if type((...)) == 'table' then
@@ -10,7 +15,7 @@ local function run_command(...) --> io.file
         if i ~= 1 then
             s = s .. ' '
         end
-        if v:find ' ' then
+        if string_find(v, ' ') then
             s = s .. '"' .. v .. '"'
         else
             s = s .. v
@@ -21,184 +26,243 @@ local function run_command(...) --> io.file
     return io.popen('"' .. s .. '"'), s
 end
 
+local path_key <const> = {}
+
+local data = {}
+
+local function get_dat(path)
+    local t = data[path]
+    if t == nil then
+        t = { entries = {}, keys = {} }
+        -- check for parents
+        local parent, skey = string_match(path, '^(.*)\\([^\\]+)$')
+        if parent then
+            local parentd = get_dat(parent)
+            parentd.keys[skey] = true
+        end
+        data[path] = t
+    end
+    return t
+end
+
 local meta = {}
 
-local HKLM = setmetatable({}, meta)
-local HKCU = setmetatable({}, meta)
-local HKCR = setmetatable({}, meta)
-local HKCC = setmetatable({}, meta)
+local function make_key(path, idx)
+    return setmetatable({ [path_key] = path .. '\\' .. idx }, meta)
+end
 
-local data = {
-    [HKLM] = { path = 'HKEY_LOCAL_MACHINE' },
-    [HKCU] = { path = 'HKEY_CURRENT_USER' },
-    [HKCR] = { path = 'HKEY_CLASSES_ROOT' },
-    [HKCC] = { path = 'HKEY_CURRENT_CONFIG' },
-}
+local function parse_reg_command_output(result, path, includes_all_under)
+    local cdat
 
-local function fill_dat_entries(dat)
-    local path = dat.path
-    local result = run_command { 'reg', 'query', path }
-    if not result then error 'reg command did not work' end
-
-    local entries = {}
-    local keys = {}
-
-    dat.entries = entries
-    dat.keys = keys
+    local actual_path
 
     for l in result:lines() do
-        if l == path then
-        elseif l:sub(1, #path) == path then
-            -- subkeys
-            local key = l:sub(#path + 2)
-            dat.keys[key] = true
-            -- print(key)
+        if l == '' then
+
+        elseif string_sub(l, 1, 4) ~= '    ' then
+            cdat = get_dat(l)
+            if not actual_path then
+                actual_path = l
+            end
+            if includes_all_under or l == actual_path then
+                cdat.entries_filled = true
+            end
         else
-            local k, ty, val = l:match('    (.-)    (REG_%w+)    (.+)')
+            local k, ty, val = string_match(l, '^    (.-)    (REG_%w+)    (.+)$')
             if k then
                 if ty == 'REG_SZ' then
-                    entries[k] = val
-             --        REG_SZ, REG_MULTI_SZ, REG_EXPAND_SZ,
-             -- REG_DWORD, REG_QWORD, REG_BINARY, REG_NONE
+                    cdat.entries[k] = val
+                    --        REG_SZ, REG_MULTI_SZ, REG_EXPAND_SZ,
+                    -- REG_DWORD, REG_QWORD, REG_BINARY, REG_NONE
                 elseif ty == 'REG_DWORD' or ty == 'REG_QWORD' then
-                    entries[k] = tonumber(val)
+                    cdat.entries[k] = tonumber(val)
                 else
                     warn('unsupported reg key type: ' .. ty)
                 end
-                -- print(k, ty, val)
             end
         end
-        -- print(l == path)
-        -- print(string.format('%q', l))
     end
+
+    return actual_path
+end
+
+local function fill_dat_entries(path)
+    local result = run_command { 'reg', 'query', path }
+    if not result then error 'reg command did not work' end
+
+    return parse_reg_command_output(result, path, false)
+end
+
+local function fill_dat_entries_full(path)
+    local result = run_command { 'reg', 'query', path, '/s' }
+    if not result then error 'reg command did not work' end
+
+    return parse_reg_command_output(result, path, true)
 end
 
 
-local function reg_next(self, pkey)
-    local dat = data[self]
-    if not dat.entries then
-        fill_dat_entries(dat)
+local function reg_next(path, pkey)
+    local dat = get_dat(path)
+    if not dat.entries_filled then
+        fill_dat_entries(path)
     end
 
     if pkey == nil or dat.entries[pkey] then
         local nextentidx, nextentv = next(dat.entries, pkey)
         if nextentidx == nil then
             local idx, v = next(dat.keys)
-            if v == true then
-                local t = setmetatable({}, meta)
-                dat.keys[idx] = t
-                data[t] = { path = dat.path .. '\\' .. idx }
-                return idx, t
+            if v then
+                return idx, make_key(path, idx)
             end
-            return idx, v
         end
         return nextentidx, nextentv
     else
         local idx, v = next(dat.keys, pkey)
-        if v == true then
-            local t = setmetatable({}, meta)
-            dat.keys[idx] = t
-            data[t] = { path = dat.path .. '\\' .. idx }
-            return idx, t
+        if v then
+            return idx, make_key(path, idx)
         end
-        return idx, v
     end
 end
 
-function meta:__pairs()
-    return reg_next, self, nil
-end
-
-
-function meta:__index(key)
-    local dat = data[self]
-    if not dat.entries then
-        fill_dat_entries(dat)
-    end
-    local entry = dat.entries[key]
-    if not entry then
-        local keyv = dat.keys[key]
-        if keyv == true then
-            -- fill in the entry
-            local t = setmetatable({}, meta)
-            dat.keys[key] = t
-            data[t] = { path = dat.path .. '\\' .. key }
-            return t
-        else
-            return keyv
-        end
-        return nil
-    end
-    return entry
-end
-
-
-local Reg = {
-    HKLM = HKLM,
-    HKCU = HKCU,
-    HKCR = HKCR,
-    HKCC = HKCC,
-    clear_cache = function(entry)
-        if not entry then
-            for k, v in pairs(data) do
-                v.entries = nil
-            end
-        else
-            if data[entry] then
-                data[entry].entries = nil
-            end
-        end
-    end,
-}
-
-
-local function reg_key_next(self, pkey)
-    local dat = data[self]
-    if not dat.entries then
-        fill_dat_entries(dat)
+local function reg_key_next(path, pkey)
+    local dat = get_dat(path)
+    if not dat.entries_filled then
+        fill_dat_entries(path)
     end
 
     local idx, v = next(dat.keys, pkey)
-    if v == true then
-        local t = setmetatable({}, meta)
-        dat.keys[idx] = t
-        data[t] = { path = dat.path .. '\\' .. idx }
-        return idx, t
+    if v then
+        return idx, make_key(path, idx)
     end
-    return idx, v
 end
 
-function Reg:get_keys()
-    return reg_key_next, self, nil
-end
-
-
-local function reg_value_next(self, pkey)
-    local dat = data[self]
-    if not dat.entries then
-        fill_dat_entries(dat)
+local function reg_value_next(path, pkey)
+    local dat = get_dat(path)
+    if not dat.entries_filled then
+        fill_dat_entries(path)
     end
 
     return next(dat.entries, pkey)
 end
 
-function Reg:get_values()
-    return reg_value_next, self, nil
+function meta:__pairs()
+    return reg_next, self[path_key], nil
 end
 
 
-for k, v in Reg.get_keys(Reg.HKCU.Software.SyncEngines.Providers.OneDrive) do
-    local id = k:match('^([%da-f]+)%+?%d*$')
-    if id then
-        print(id)
-        print('mounted at:', v.MountPoint)
-        print('type:      ', v.LibraryType)
-        print('web url:   ', v.WebUrl)
-        print('is_folder: ', v.IsFolderScope and true or false)
-        -- for k2, v2 in Reg.get_values(v) do
-        --     print('>', k2, v2)
-        -- end
-        print()
+local function index_ncs(self, idx)
+    if type(idx) ~= 'string' then
+        return nil
+    end
+    local path = self[path_key]
+    local dat = get_dat(path)
+    for k, v in pairs(dat.entries) do
+        if string_lower(k) == string_lower(idx) then
+            return v
+        end
+    end
+    for k in pairs(dat.keys) do
+        if string_lower(k) == string_lower(idx) then
+            return make_key(path, k)
+        end
+    end
+end
+
+function meta:__index(idx)
+    if idx == path_key then
+        error 'path is nil'
+    end
+    local path = self[path_key]
+    local dat = get_dat(path)
+    if dat.keys[idx] then
+        return make_key(path, idx)
+    end
+    if not dat.entries_filled then
+        fill_dat_entries(path)
+    end
+    local entry = dat.entries[idx]
+    if entry == nil then
+        local keyv = dat.keys[idx]
+        if keyv then
+            return make_key(path, idx)
+        end
+        return index_ncs(self, idx)
+    end
+    return entry
+end
+
+
+local base_key_to_actual = {
+    HKLM = HKEY_LOCAL_MACHINE,
+    HKCU = HKEY_CURRENT_USER,
+    HKCR = HKEY_CLASSES_ROOT,
+    HKCC = HKEY_CURRENT_CONFIG,
+    HKU  = HKEY_USERS,
+
+    HKEY_LOCAL_MACHINE  = HKEY_LOCAL_MACHINE,
+    HKEY_CURRENT_USER   = HKEY_CURRENT_USER,
+    HKEY_CLASSES_ROOT   = HKEY_CLASSES_ROOT,
+    HKEY_CURRENT_CONFIG = HKEY_CURRENT_CONFIG,
+    HKEY_USERS          = HKEY_USERS,
+}
+
+
+local Reg = {
+    HKLM = setmetatable({ [path_key] = 'HKEY_LOCAL_MACHINE' }, meta),
+    HKCU = setmetatable({ [path_key] = 'HKEY_CURRENT_USER' }, meta),
+    HKCR = setmetatable({ [path_key] = 'HKEY_CLASSES_ROOT' }, meta),
+    HKCC = setmetatable({ [path_key] = 'HKEY_CURRENT_CONFIG' }, meta),
+    HKU  = setmetatable({ [path_key] = 'HKEY_USERS' }, meta),
+    path_key = path_key,
+    load_all_below = function(path)
+        if path[path_key] then
+            path = path[path_key]
+        end
+        local actual_path = fill_dat_entries_full(path)
+        return setmetatable({ [path_key] = actual_path }, meta)
+    end,
+    load = function(path)
+        local actual_path = fill_dat_entries(path)
+        return setmetatable({ [path_key] = actual_path }, meta)
+    end,
+    clone = function(self)
+        assert(self[path_key], 'parameter is not a Reg entry')
+        return setmetatable({ [path_key] = self[path_key] }, meta)
+    end,
+    pairs_keys = function(self)
+        assert(self[path_key], 'parameter is not a Reg entry')
+        return reg_key_next, self[path_key], nil
+    end,
+    pairs_values = function(self)
+        assert(self[path_key], 'parameter is not a Reg entry')
+        return reg_value_next, self[path_key], nil
+    end,
+    print_cache = function()
+        local paths = {}
+        for k, v in pairs(data) do
+            if v.entries_filled then
+                table.insert(paths, k)
+                for vk in pairs(v.entries) do
+                    table.insert(paths, k .. '\\' .. vk)
+                end
+            end
+        end
+        table.sort(paths)
+        for _, v in ipairs(paths) do
+            print(v)
+        end
+    end,
+}
+
+function Reg.clear_cache(path)
+    if not path then
+        data = {}
+    elseif data[path] then
+        -- clear everything below as well
+        for k in pairs(data[path].keys) do
+            Reg.clear_cache(path .. '\\' .. k)
+        end
+        data[path] = nil
     end
 end
 
