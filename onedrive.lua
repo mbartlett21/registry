@@ -18,6 +18,7 @@ function OneDrive.refresh_id_list()
 
     for k, v in Reg.pairs_keys(Reg.load_all_below(base_key)) do
         local id = k:match '^([%da-f]+)%+?%d*$'
+        -- if that particular onedrive isn't syncing anymore, WebUrl is no longer filled out.
         if id and v.WebUrl and v.MountPoint then
 
             -- all the values are stored as strings, even the number ones.
@@ -68,13 +69,19 @@ function OneDrive.synced_items() --> iterator (id, mount_point, dat)
 end
 
 function OneDrive.get_for_id(id) --> mount_point, dat
+    if type(id) ~= 'string' then
+        return nil, 'id is not a string'
+    end
+
+    id = id:lower()
+
     local dat = id_to_folder_info[id]
     if not dat then
         OneDrive.refresh_id_list()
         dat = id_to_folder_info[id]
     end
     if not dat then
-        if type(id) ~= 'string' or #id ~= 32 then
+        if #id ~= 32 or not id:match('^[%da-f]+$') then
             return nil, 'id is invalid'
         else
             return nil, 'folder not synced'
