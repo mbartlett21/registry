@@ -42,22 +42,24 @@ end
 function pairs(Entry) --> next, self, nil
 end
 
+-- Note that these are not methods but functions on Reg.
+
+-- Clones the entry and returns another reference
+function Reg.clone(Entry) --> Entry
+end
+
+-- Returns an iterator over sub-keys
+function Reg.pairs_keys(Entry) --> next, entry, nil
+end
+
+-- Returns an iterator over end values
+function Reg.pairs_values(Entry) --> next, entry, nil
+end
+
 -- Returns a sub-key entry, the end value, or nil
 -- lookups are case-insensitive, though the correct
 -- case is slightly faster.
 Entry[key] --> Entry | value | nil
-
--- Clones the entry and returns another reference
-function Entry:clone() --> Self
-end
-
--- Returns an iterator over sub-keys
-function Entry:pairs_keys() --> next, self, nil
-end
-
--- Returns an iterator over end values
-function Entry:pairs_values() --> next, self, nil
-end
 ```
 
 `onedrive`
